@@ -84,6 +84,17 @@ return { a }`
   })
 })
 
+describe('policy: state durability', () => {
+  test('concurrent persists leave valid state.json and no temp files', async () => {
+    const { runsDir, result, state } = await runWorkflow(FANOUT, { concurrency: { default: 8 } })
+    const st = await state()
+    expect(st.status).toBe('completed')
+    expect(Object.keys(st.effects as object).length).toBe(4) // all effects recorded
+    const files = await fs.readdir(path.join(runsDir, result.runId))
+    expect(files.some((f) => f.includes('.tmp'))).toBe(false) // atomic rename cleaned up
+  })
+})
+
 describe('policy: replay / resume', () => {
   test('re-running a completed run replays effects without re-invoking the adapter', async () => {
     const src = `export const meta = { name: 'w', description: 'd', phases: [{ title: 'p' }] }
@@ -127,6 +138,35 @@ describe('policy: determinism enforcement (blocked globals)', () => {
   test('setTimeout use throws at runtime', async () => {
     const src = `export const meta = { name: 'w', description: 'd', phases: [] }\nsetTimeout(() => {}, 1)\nreturn {}`
     expect(runWorkflow(src)).rejects.toThrow(/timers/)
+  })
+
+  test('Math.random throws at runtime (enforced, not just linted)', async () => {
+    const src = `export const meta = { name: 'w', description: 'd', phases: [] }\nconst r = Math.random()\nreturn { r }`
+    expect(runWorkflow(src)).rejects.toThrow(/Math\.random/)
+  })
+
+  test('Math.max still works (only random is blocked)', async () => {
+    const src = `export const meta = { name: 'w', description: 'd', phases: [] }\nreturn { n: Math.max(1, 2, 3) }`
+    const { result } = await runWorkflow(src)
+    expect(result.workflowResult).toEqual({ n: 3 })
+  })
+
+  test('fetch throws at runtime (isolation is enforced, not advisory)', async () => {
+    const src = `export const meta = { name: 'w', description: 'd', phases: [] }\nawait fetch('https://example.com')\nreturn {}`
+    expect(runWorkflow(src)).rejects.toThrow(/fetch/)
+  })
+
+  test('runtime enforces every forbidden identifier the lint contract names', async () => {
+    // Guards against the runtime and DSL_CONTRACT.forbidden drifting apart.
+    // `import` is a syntax-level keyword (can't be a sandbox param), so it is
+    // covered by lint + the AsyncFunction body, not by runtime shadowing.
+    const { DSL_CONTRACT } = await import('@open-workflow/core')
+    for (const f of DSL_CONTRACT.forbidden) {
+      if (f.name === 'import') continue
+      const usage = f.name === 'Math.random' ? 'Math.random()' : `${f.name}('x')`
+      const src = `export const meta = { name: 'w', description: 'd', phases: [] }\n${usage}\nreturn {}`
+      expect(runWorkflow(src), `expected runtime to block ${f.name}`).rejects.toThrow()
+    }
   })
 
   test('a failed workflow persists status=failed', async () => {

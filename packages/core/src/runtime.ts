@@ -184,8 +184,13 @@ function createRuntime(ctx: RuntimeContext): RuntimeApi {
     appendFileSync(ctx.eventsPath, `${JSON.stringify(event)}\n`)
   }
 
-  async function persist() {
-    await saveState(ctx.statePath, ctx.state)
+  // Serialize state writes: under parallel()/pipeline() many effects call
+  // persist() concurrently. Chain them so writes never interleave (the atomic
+  // rename in saveState handles the torn-write half; this handles ordering).
+  let persistChain: Promise<void> = Promise.resolve()
+  function persist() {
+    persistChain = persistChain.then(() => saveState(ctx.statePath, ctx.state))
+    return persistChain
   }
 
   async function agent(prompt: string, opts: AgentOptions = {}) {
@@ -361,11 +366,20 @@ async function executeWorkflow(source: string, runtime: RuntimeApi) {
     'setInterval',
     'clearTimeout',
     'clearInterval',
+    'fetch',
+    'require',
+    'Math',
     'globalThis',
     source,
   )
   const blockedTimer = () => {
     throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
+  }
+  const blockedFetch = () => {
+    throw new Error('workflow scripts cannot use fetch; do nondeterministic I/O inside an agent()')
+  }
+  const blockedRequire = () => {
+    throw new Error('workflow scripts cannot require/import; the scope is sandboxed')
   }
   return fn(
     runtime.args,
@@ -380,8 +394,23 @@ async function executeWorkflow(source: string, runtime: RuntimeApi) {
     blockedTimer,
     blockedTimer,
     blockedTimer,
+    blockedFetch,
+    blockedRequire,
+    createBlockedMath(),
     createBlockedGlobal(),
   )
+}
+
+/** Math with `random` blocked (non-deterministic) — every other member delegates to the real Math. */
+function createBlockedMath(): Math {
+  return new Proxy(Math, {
+    get(target, prop, receiver) {
+      if (prop === 'random') {
+        throw new Error('workflow scripts cannot use Math.random; it is non-deterministic')
+      }
+      return Reflect.get(target, prop, receiver)
+    },
+  })
 }
 
 function createBlockedDate() {
@@ -396,19 +425,20 @@ function createBlockedDate() {
 }
 
 function createBlockedGlobal() {
+  const blockedTimer = () => {
+    throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
+  }
   return {
     Date: createBlockedDate(),
-    setTimeout: () => {
-      throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
-    },
-    setInterval: () => {
-      throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
-    },
-    clearTimeout: () => {
-      throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
-    },
-    clearInterval: () => {
-      throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
+    Math: createBlockedMath(),
+    setTimeout: blockedTimer,
+    setInterval: blockedTimer,
+    clearTimeout: blockedTimer,
+    clearInterval: blockedTimer,
+    fetch: () => {
+      throw new Error(
+        'workflow scripts cannot use fetch; do nondeterministic I/O inside an agent()',
+      )
     },
   }
 }
@@ -499,7 +529,11 @@ async function loadOrCreateState(statePath: string, fallback: WorkflowState) {
 }
 
 async function saveState(statePath: string, state: WorkflowState) {
-  await fs.writeFile(statePath, JSON.stringify(state, null, 2))
+  // Write-then-rename: rename is atomic on the same filesystem, so a crash
+  // mid-write can never leave a torn state.json — the old file stays intact.
+  const tmp = `${statePath}.${crypto.randomBytes(4).toString('hex')}.tmp`
+  await fs.writeFile(tmp, JSON.stringify(state, null, 2))
+  await fs.rename(tmp, statePath)
 }
 
 function resolveChildWorkflow(nameOrPath: string, workflowDir: string) {
