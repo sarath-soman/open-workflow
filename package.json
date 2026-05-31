@@ -1,6 +1,6 @@
 {
   "name": "open-workflow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Source-compatible runtime for Claude Code-style workflow scripts with pluggable agent adapters.",
   "type": "module",
