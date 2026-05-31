@@ -1,0 +1,7 @@
+{
+  "workflows": {
+    "hello": "examples/hello.workflow.js"
+  },
+  "defaultAdapter": "mock",
+  "runsDir": ".open-workflow/runs"
+}

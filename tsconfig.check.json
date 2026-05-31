@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "paths": {
+      "@open-workflow/core": ["./packages/core/src/index.ts"],
+      "@open-workflow/adapter-mock": ["./packages/adapter-mock/src/index.ts"]
+    }
+  },
+  "include": ["packages/**/*.ts"]
+}
