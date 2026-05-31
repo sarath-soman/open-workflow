@@ -10,10 +10,13 @@
   ],
   "scripts": {
     "ow": "bun packages/cli/src/index.ts",
+    "owf": "bun packages/cli/src/index.ts",
     "check": "bun run check:types && bun run check:biome",
     "check:types": "bunx tsc --noEmit -p tsconfig.check.json",
     "check:biome": "bunx biome check .",
     "format": "bunx biome format --write .",
+    "build": "bun build --compile packages/cli/src/index.ts --outfile dist/owf",
+    "build:all": "bash scripts/build.sh",
     "smoke": "bun packages/cli/src/index.ts run hello --adapter mock --args '{\"topic\":\"workflow runtime\"}' --output json"
   },
   "engines": {

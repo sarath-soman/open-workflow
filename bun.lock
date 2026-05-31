@@ -10,6 +10,13 @@
         "typescript": "latest",
       },
     },
+    "packages/adapter-codex": {
+      "name": "@open-workflow/adapter-codex",
+      "version": "0.1.0",
+      "dependencies": {
+        "@open-workflow/core": "workspace:*",
+      },
+    },
     "packages/adapter-mock": {
       "name": "@open-workflow/adapter-mock",
       "version": "0.1.0",
@@ -24,6 +31,7 @@
         "open-workflow": "./src/index.ts",
       },
       "dependencies": {
+        "@open-workflow/adapter-codex": "workspace:*",
         "@open-workflow/adapter-mock": "workspace:*",
         "@open-workflow/core": "workspace:*",
       },
@@ -51,6 +59,8 @@
     "@biomejs/cli-win32-arm64": ["@biomejs/cli-win32-arm64@2.4.16", "", { "os": "win32", "cpu": "arm64" }, "sha512-0rgImMsNb5v/chhkIFe3wu7PEFClS6RBAYUijGL9UsYN3PanSaoK24HSSuSJb1pYbYYVjzAyZTl3gtjJ84BM8A=="],
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.4.16", "", { "os": "win32", "cpu": "x64" }, "sha512-Kp85jgoBHa05gix6UIRjfCDiUV3w/8VIdZ247VyyO2gEjaw12WEVhdIjlxp/AMzXxqxQwbxNTDVZ3Mwd2RG5rw=="],
+
+    "@open-workflow/adapter-codex": ["@open-workflow/adapter-codex@workspace:packages/adapter-codex"],
 
     "@open-workflow/adapter-mock": ["@open-workflow/adapter-mock@workspace:packages/adapter-mock"],
 

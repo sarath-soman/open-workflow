@@ -1,0 +1,12 @@
+{
+  "name": "@open-workflow/adapter-codex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@open-workflow/core": "workspace:*"
+  }
+}

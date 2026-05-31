@@ -3,8 +3,9 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
+import { type CodexAdapterConfig, createCodexAdapter } from '@open-workflow/adapter-codex'
 import { createMockAdapter } from '@open-workflow/adapter-mock'
-import type { ConcurrencyConfig } from '@open-workflow/core'
+import type { AgentAdapter, ConcurrencyConfig } from '@open-workflow/core'
 import { runWorkflowFile, validateWorkflowFile } from '@open-workflow/core'
 
 const DEFAULT_RUNS_DIR = '.open-workflow/runs'
@@ -39,7 +40,7 @@ async function runCommand(argv: string[]) {
   const cwd = path.resolve(stringFlag(flags.cwd) || process.cwd())
   const runsDir = path.resolve(cwd, stringFlag(flags['runs-dir']) || DEFAULT_RUNS_DIR)
   const config = await loadConfigFromFlags(cwd, flags)
-  const adapter = adapterFromFlags(flags)
+  const adapter = adapterFromFlags(flags, config)
   const args = await parseJsonOrFile(stringFlag(flags.args) ?? '{}', cwd)
   const workflowPath = resolveWorkflowTarget(target, cwd, config)
 
@@ -103,7 +104,7 @@ async function resumeCommand(argv: string[]) {
     scriptPath: string
     args?: Record<string, unknown>
   }
-  const adapter = adapterFromFlags(flags)
+  const adapter = adapterFromFlags(flags, config)
   const result = await runWorkflowFile(state.scriptPath, {
     args: state.args ?? {},
     adapter,
@@ -116,14 +117,24 @@ async function resumeCommand(argv: string[]) {
   renderRunResult(result, outputFlag(flags.output))
 }
 
-function adapterFromFlags(flags: Flags) {
-  const name = stringFlag(flags.adapter) || 'mock'
-  if (name !== 'mock') {
-    throw new Error(`adapter "${name}" is not implemented yet; use --adapter mock`)
+function adapterFromFlags(flags: Flags, config: OpenWorkflowConfig | null): AgentAdapter {
+  const name = stringFlag(flags.adapter) || config?.defaultAdapter || 'mock'
+  if (name === 'mock') {
+    return createMockAdapter({
+      responses: flags['mock-responses'] ? JSON.parse(String(flags['mock-responses'])) : {},
+    })
   }
-  return createMockAdapter({
-    responses: flags['mock-responses'] ? JSON.parse(String(flags['mock-responses'])) : {},
-  })
+  if (name === 'codex') {
+    const codexConfig: CodexAdapterConfig = {}
+    const bin = stringFlag(flags['codex-bin'])
+    const model = stringFlag(flags['codex-model'])
+    const sandbox = stringFlag(flags['codex-sandbox'])
+    if (bin) codexConfig.bin = bin
+    if (model) codexConfig.model = model
+    if (sandbox) codexConfig.sandbox = sandbox as NonNullable<CodexAdapterConfig['sandbox']>
+    return createCodexAdapter(codexConfig)
+  }
+  throw new Error(`adapter "${name}" is not implemented yet; use --adapter mock or --adapter codex`)
 }
 
 function resolveWorkflowTarget(target: string, cwd: string, config: OpenWorkflowConfig | null) {
@@ -161,6 +172,7 @@ async function loadConfig(configPath: string) {
 type OpenWorkflowConfig = {
   workflows?: Record<string, string>
   concurrency?: ConcurrencyConfig
+  defaultAdapter?: string
 }
 
 function concurrencyFromFlags(
@@ -267,17 +279,20 @@ function outputFlag(value: string | boolean | undefined): 'pretty' | 'json' {
 }
 
 function printHelp() {
-  console.log(`open-workflow
+  console.log(`owf — open-workflow
 
 Usage:
-  open-workflow run <workflow.js|name> [--args JSON_OR_FILE] [--adapter mock] [--output pretty|json]
-                     [--agent-concurrency N] [--concurrency GROUP=N[,GROUP=N]]
-  open-workflow validate <workflow.js|name>
-  open-workflow status <run-id>
-  open-workflow resume <run-id>
+  owf run <workflow.js|name> [--args JSON_OR_FILE] [--adapter mock|codex] [--output pretty|json]
+          [--agent-concurrency N] [--concurrency GROUP=N[,GROUP=N]]
+  owf validate <workflow.js|name>
+  owf status <run-id>
+  owf resume <run-id>
 
-MVP adapter:
-  mock
+Adapters:
+  mock              deterministic, quota-free (default)
+  codex             run each agent() through \`codex exec\`
+                      [--codex-model M] [--codex-sandbox read-only|workspace-write|danger-full-access]
+                      [--codex-bin PATH]
 `)
 }
 

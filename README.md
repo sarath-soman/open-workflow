@@ -197,13 +197,33 @@ control.
 
 ## Status
 
-Early runtime scaffold. The MVP runs `.workflow.js` files through the `mock`
-adapter, writes a durable run directory, and exposes the same core globals Claude
-Code workflows use: `args`, `agent`, `workflow`, `parallel`, `pipeline`, `phase`,
-and `log`. Runtime-owned concurrency gates are implemented. Budget backstop
-support is the next control to add.
+Early runtime scaffold. The MVP runs `.workflow.js` files through the `mock` and
+`codex` adapters, writes a durable run directory, and exposes the same core
+globals Claude Code workflows use: `args`, `agent`, `workflow`, `parallel`,
+`pipeline`, `phase`, and `log`. Runtime-owned concurrency gates are implemented,
+and the Codex adapter runs each `agent()` effect through `codex exec` (see
+[Adapters](docs/adapters.md)). Budget backstop support is the next control to
+add.
+
+## Install
+
+Install the `owf` CLI — a standalone executable, no Node or Bun required:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sarath-soman/open-workflow/main/scripts/install.sh | bash
+```
+
+This installs `owf` into `~/.owf/bin` (override with `OWF_INSTALL`); add it to your `PATH` as the
+installer prints. Pin a version by passing a tag: `… | bash -s v0.1.0`.
+
+```bash
+owf run hello --args '{"topic":"codex adapter"}'
+owf --help
+```
 
 ## Quick Start
+
+From source (requires Bun >= 1.3):
 
 ```bash
 bun install
@@ -232,7 +252,7 @@ state.json
 ## Commands
 
 ```bash
-open-workflow run <workflow.js|name> [--args JSON_OR_FILE] [--adapter mock]
+open-workflow run <workflow.js|name> [--args JSON_OR_FILE] [--adapter mock|codex]
 open-workflow validate <workflow.js|name>
 open-workflow status <run-id>
 open-workflow resume <run-id>
@@ -247,9 +267,10 @@ bun run ow run hello
 ## Packages
 
 ```text
-packages/core          workflow loader, runtime, event log, DSL globals
-packages/cli           Bun CLI
-packages/adapter-mock  deterministic quota-free adapter
+packages/core           workflow loader, runtime, event log, DSL globals
+packages/cli            Bun CLI
+packages/adapter-mock   deterministic quota-free adapter
+packages/adapter-codex  runs each agent() through `codex exec`
 ```
 
 The CLI imports package exports directly from the workspace. Build output is not

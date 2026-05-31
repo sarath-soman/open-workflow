@@ -4,12 +4,14 @@
   "private": true,
   "type": "module",
   "bin": {
-    "open-workflow": "./src/index.ts"
+    "open-workflow": "./src/index.ts",
+    "owf": "./src/index.ts"
   },
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@open-workflow/adapter-codex": "workspace:*",
     "@open-workflow/adapter-mock": "workspace:*",
     "@open-workflow/core": "workspace:*"
   }

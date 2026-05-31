@@ -2,9 +2,9 @@ import crypto from 'node:crypto'
 import { appendFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { createScheduler, type Scheduler } from './scheduler.js'
 import type {
   AgentAdapter,
-  ConcurrencyConfig,
   JsonSchema,
   RuntimeOptions,
   WorkflowMeta,
@@ -65,8 +65,7 @@ type RuntimeContext = {
   state: WorkflowState
   statePath: string
   eventsPath: string
-  concurrency: NormalizedConcurrencyConfig
-  gates: ConcurrencyGates
+  scheduler: Scheduler
 }
 
 type RuntimeApi = RuntimeContext & {
@@ -131,9 +130,8 @@ export async function runWorkflowFile(
     meta,
     args: state.args,
     adapter: options.adapter,
-    concurrency: normalizeConcurrency(options.concurrency),
+    scheduler: options.scheduler ?? createScheduler(options.concurrency),
     cwd: options.cwd,
-    gates: options.gates ?? new Map(),
     workflowDir: path.dirname(absScriptPath),
     runsDir,
     runDir,
@@ -217,9 +215,8 @@ function createRuntime(ctx: RuntimeContext): RuntimeApi {
       startedAt: new Date().toISOString(),
     }
     ctx.state.effects[effectId] = effect
-    const concurrencyGroup = resolveConcurrencyGroup(opts, currentPhase, ctx.concurrency)
+    const concurrencyGroup = ctx.scheduler.resolveGroup(opts, currentPhase)
     effect.concurrencyGroup = concurrencyGroup
-    const gate = getGate(ctx.gates, ctx.concurrency, concurrencyGroup)
     emit('agent.queued', {
       effectId,
       concurrencyGroup,
@@ -229,7 +226,7 @@ function createRuntime(ctx: RuntimeContext): RuntimeApi {
     })
     await persist()
 
-    const release = await gate.acquire()
+    const release = await ctx.scheduler.acquire(concurrencyGroup)
     emit('agent.started', {
       effectId,
       concurrencyGroup,
@@ -296,9 +293,8 @@ function createRuntime(ctx: RuntimeContext): RuntimeApi {
     const result = await runWorkflowFile(workflowPath, {
       args,
       adapter: ctx.adapter,
-      concurrency: ctx.concurrency,
+      scheduler: ctx.scheduler,
       cwd: ctx.cwd,
-      gates: ctx.gates,
       runsDir: ctx.runsDir,
     })
     return result.workflowResult
@@ -345,87 +341,7 @@ function createRuntime(ctx: RuntimeContext): RuntimeApi {
 }
 
 type InternalRuntimeOptions = RuntimeOptions & {
-  gates?: ConcurrencyGates | undefined
-}
-
-type NormalizedConcurrencyConfig = {
-  default: number
-  groups: Record<string, number>
-  rules: Array<{
-    group: string
-    label?: string | undefined
-    labelPrefix?: string | undefined
-    phase?: string | undefined
-    agentType?: string | undefined
-    model?: string | undefined
-  }>
-}
-
-type ConcurrencyGates = Map<string, Semaphore>
-
-class Semaphore {
-  readonly limit: number
-  #active = 0
-  #queue: Array<() => void> = []
-
-  constructor(limit: number) {
-    if (!Number.isInteger(limit) || limit < 1) {
-      throw new Error(`concurrency limit must be a positive integer; got ${limit}`)
-    }
-    this.limit = limit
-  }
-
-  async acquire(): Promise<() => void> {
-    if (this.#active >= this.limit) {
-      await new Promise<void>((resolve) => this.#queue.push(resolve))
-    }
-    this.#active++
-    let released = false
-    return () => {
-      if (released) return
-      released = true
-      this.#active--
-      const next = this.#queue.shift()
-      if (next) next()
-    }
-  }
-}
-
-function normalizeConcurrency(config?: ConcurrencyConfig): NormalizedConcurrencyConfig {
-  return {
-    default: config?.default ?? Number.POSITIVE_INFINITY,
-    groups: config?.groups ?? {},
-    rules: config?.rules ?? [],
-  }
-}
-
-function getGate(
-  gates: ConcurrencyGates,
-  config: NormalizedConcurrencyConfig,
-  group: string,
-): Semaphore {
-  const existing = gates.get(group)
-  if (existing) return existing
-  const limit = config.groups[group] ?? config.default
-  const gate = new Semaphore(limit === Number.POSITIVE_INFINITY ? Number.MAX_SAFE_INTEGER : limit)
-  gates.set(group, gate)
-  return gate
-}
-
-function resolveConcurrencyGroup(
-  opts: AgentOptions,
-  currentPhase: string | null,
-  config: NormalizedConcurrencyConfig,
-) {
-  for (const rule of config.rules) {
-    if (rule.label !== undefined && rule.label !== opts.label) continue
-    if (rule.labelPrefix !== undefined && !opts.label?.startsWith(rule.labelPrefix)) continue
-    if (rule.phase !== undefined && rule.phase !== (opts.phase || currentPhase)) continue
-    if (rule.agentType !== undefined && rule.agentType !== opts.agentType) continue
-    if (rule.model !== undefined && rule.model !== opts.model) continue
-    return rule.group
-  }
-  return 'default'
+  scheduler?: Scheduler | undefined
 }
 
 async function executeWorkflow(source: string, runtime: RuntimeApi) {

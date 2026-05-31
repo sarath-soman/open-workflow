@@ -1,4 +1,5 @@
 export { extractMeta, runWorkflowFile, validateWorkflowFile } from './runtime.js'
+export { createScheduler, type GroupSelector, Scheduler } from './scheduler.js'
 export type {
   AdapterContext,
   AgentAdapter,
