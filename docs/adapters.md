@@ -89,6 +89,12 @@ Mapping from `AgentRunInput`:
 | `model` | `-m` (falls back to adapter `model` config) |
 | `cwd` | `-C` |
 
+OpenAI structured outputs are strict: every object schema must carry
+`additionalProperties: false` and list all properties in `required`. The adapter
+tightens the author's JSON Schema accordingly (recursively) before passing it to
+`--output-schema`, so workflow authors can write ordinary schemas. This is a
+provider concern — the mock adapter needs none of it.
+
 The final message is read from the `--output-last-message` file — the reliable,
 JSONL-shape-independent source — while `--json` stdout is retained verbatim as
 `transcript.jsonl`. `usage` is best-effort parsed from the JSONL stream. A

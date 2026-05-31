@@ -94,6 +94,29 @@ describe('codex adapter', () => {
     ).toBe(true)
   })
 
+  test('tightens object schemas for OpenAI strict structured outputs', async () => {
+    const a = createCodexAdapter({ bin: okBin })
+    const ctx = await runCtx()
+    await a.run(
+      input({
+        schema: {
+          type: 'object',
+          properties: { verdict: { enum: ['ok'] }, note: { type: 'string' } },
+          required: ['verdict'],
+        },
+      }),
+      ctx,
+    )
+    const written = JSON.parse(
+      await fs.readFile(
+        path.join(ctx.runDir, 'agents', ctx.effectId, 'output-schema.json'),
+        'utf8',
+      ),
+    )
+    expect(written.additionalProperties).toBe(false)
+    expect(written.required.sort()).toEqual(['note', 'verdict']) // all props become required
+  })
+
   test('parses usage from the JSONL stream', async () => {
     const a = createCodexAdapter({ bin: okBin })
     const res = await a.run(input(), await runCtx())

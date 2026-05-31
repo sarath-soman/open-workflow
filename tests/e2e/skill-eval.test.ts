@@ -109,22 +109,39 @@ return { outcome: 'complete', plan, checks }`
 
 // Live skill-eval against real Codex. Quota-spending, so opt-in only:
 //   OWF_LIVE_CODEX_EVAL=1 bun test tests/e2e/skill-eval.test.ts
+// The all-constructs fixture exercises every DSL semantic at least once through
+// the real adapter: args, phase, log, plain agent, schema agent, parallel,
+// pipeline, child workflow — gated at heavy=1 to also drive the scheduler.
 const live = process.env.OWF_LIVE_CODEX_EVAL === '1'
 describe('skill-eval: live Codex run (opt-in)', () => {
-  test.if(live)('runs the hello example through the real codex adapter', async () => {
-    const ran = await runCli([
-      'run',
-      path.join(REPO, 'examples/hello.workflow.js'),
-      '--adapter',
-      'codex',
-      '--runs-dir',
-      mkdtempSync(path.join(tmpdir(), 'owf-live-')),
-      '--output',
-      'json',
-    ])
-    expect(ran.code).toBe(0)
-    expect(JSON.parse(ran.stdout).status).toBe('completed')
-  })
+  test.if(live)(
+    'runs every DSL construct through the real codex adapter',
+    async () => {
+      const ran = await runCli([
+        'run',
+        path.join(REPO, 'tests/e2e/fixtures/all-constructs.workflow.js'),
+        '--adapter',
+        'codex',
+        '--concurrency',
+        'heavy=1',
+        '--runs-dir',
+        mkdtempSync(path.join(tmpdir(), 'owf-live-')),
+        '--args',
+        '{"topic":"open workflow"}',
+        '--output',
+        'json',
+      ])
+      expect(ran.code).toBe(0)
+      const result = JSON.parse(ran.stdout)
+      expect(result.status).toBe('completed')
+      expect(typeof result.workflowResult.plan).toBe('string')
+      expect(result.workflowResult.checks).toHaveLength(2)
+      expect(result.workflowResult.checks[0]).toHaveProperty('verdict')
+      expect(result.workflowResult.refined).toHaveLength(1)
+      expect(result.workflowResult.sub).toEqual({ child: 1 })
+    },
+    180_000,
+  )
 
   test.if(!live)('skipped unless OWF_LIVE_CODEX_EVAL=1', () => {
     expect(true).toBe(true)

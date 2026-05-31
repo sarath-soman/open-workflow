@@ -7,6 +7,7 @@ import type {
   AgentAdapter,
   AgentRunInput,
   AgentRunResult,
+  JsonSchema,
 } from '@open-workflow/core'
 
 export type CodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -63,7 +64,7 @@ export function createCodexAdapter(config: CodexAdapterConfig = {}): AgentAdapte
 
       if (input.schema) {
         const schemaPath = path.join(agentDir, 'output-schema.json')
-        await fs.writeFile(schemaPath, JSON.stringify(input.schema, null, 2))
+        await fs.writeFile(schemaPath, JSON.stringify(toStrictSchema(input.schema), null, 2))
         args.push('--output-schema', schemaPath)
       }
       if (config.extraArgs?.length) args.push(...config.extraArgs)
@@ -126,6 +127,33 @@ function runCodex(bin: string, args: string[], stdin: string): Promise<CodexProc
     child.stdin.write(stdin)
     child.stdin.end()
   })
+}
+
+/**
+ * OpenAI structured outputs are strict: every object must set
+ * `additionalProperties: false` and list all properties in `required`. The DSL
+ * lets authors write ordinary JSON Schema; this tightens it per object/array
+ * recursively so `--output-schema` is accepted. (Provider concern — the mock
+ * adapter needs none of this.)
+ */
+function toStrictSchema(schema: JsonSchema): JsonSchema {
+  if (!schema || typeof schema !== 'object') return schema
+  if (schema.type === 'object' || schema.properties) {
+    const properties = schema.properties ?? {}
+    const next: Record<string, JsonSchema> = {}
+    for (const [key, value] of Object.entries(properties)) next[key] = toStrictSchema(value)
+    return {
+      ...schema,
+      type: 'object',
+      properties: next,
+      required: Object.keys(properties),
+      additionalProperties: false,
+    }
+  }
+  if (schema.type === 'array' || schema.items) {
+    return { ...schema, ...(schema.items ? { items: toStrictSchema(schema.items) } : {}) }
+  }
+  return schema
 }
 
 function serializableInput(input: AgentRunInput) {

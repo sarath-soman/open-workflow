@@ -15,6 +15,7 @@ import {
   validateWorkflowFile,
 } from '@open-workflow/core'
 import { AUTHOR_WORKFLOW_SKILL, AUTHOR_WORKFLOW_SKILL_NAME } from './codex-skill.js'
+import { renderTemplate, TEMPLATE_NAMES, type TemplateName } from './templates.js'
 
 const DEFAULT_RUNS_DIR = '.open-workflow/runs'
 
@@ -38,6 +39,8 @@ export async function main(argv: string[]) {
   if (command === 'resume') return resumeCommand(rest)
   if (command === 'dsl') return dslCommand(rest)
   if (command === 'codex') return codexCommand(rest)
+  if (command === 'new') return newCommand(rest)
+  if (command === 'trace') return traceCommand(rest)
 
   throw new Error(`unknown command: ${command}`)
 }
@@ -124,6 +127,137 @@ async function codexCommand(argv: string[]) {
   await fs.writeFile(skillPath, AUTHOR_WORKFLOW_SKILL)
   console.log(`installed '${AUTHOR_WORKFLOW_SKILL_NAME}' skill to ${skillPath}`)
   console.log(`Codex discovers it under ${skillsRoot}. Invoke with @${AUTHOR_WORKFLOW_SKILL_NAME}.`)
+}
+
+async function newCommand(argv: string[]) {
+  const { positional, flags } = parseArgs(argv)
+  const name = positional[0]
+  if (!name) {
+    throw new Error(
+      `usage: owf new <name> [--template ${TEMPLATE_NAMES.join('|')}] [--dir DIR] [--force]`,
+    )
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+    throw new Error('workflow name must match [A-Za-z0-9_-]+')
+  }
+  const templateName = (stringFlag(flags.template) || 'basic') as TemplateName
+  if (!TEMPLATE_NAMES.includes(templateName)) {
+    throw new Error(`unknown template "${templateName}"; choices: ${TEMPLATE_NAMES.join(', ')}`)
+  }
+  const cwd = path.resolve(stringFlag(flags.cwd) || process.cwd())
+  const dir = path.resolve(cwd, stringFlag(flags.dir) || '.')
+  const file = path.join(dir, `${name}.workflow.js`)
+  if (flags.force !== true && (await pathExists(file))) {
+    throw new Error(`${file} already exists (use --force to overwrite)`)
+  }
+  await fs.mkdir(dir, { recursive: true })
+  await fs.writeFile(file, renderTemplate(templateName, name))
+  console.log(`created ${file} (template: ${templateName})`)
+  console.log(`next: owf validate ${file} --strict && owf run ${file} --adapter mock`)
+}
+
+async function traceCommand(argv: string[]) {
+  const { positional, flags } = parseArgs(argv)
+  const runId = positional[0]
+  if (!runId) throw new Error('trace requires a run id')
+  const cwd = path.resolve(stringFlag(flags.cwd) || process.cwd())
+  const runsDir = path.resolve(cwd, stringFlag(flags['runs-dir']) || DEFAULT_RUNS_DIR)
+  const state = JSON.parse(
+    await fs.readFile(path.join(runsDir, runId, 'state.json'), 'utf8'),
+  ) as RunState
+  const trace = buildTrace(state)
+  if (flags.output === 'json') {
+    console.log(JSON.stringify(trace, null, 2))
+    return
+  }
+  console.log(`${trace.status}: ${trace.workflow}  (run ${trace.runId})`)
+  for (const phase of trace.phases) {
+    console.log(`phase ${phase.title}`)
+    for (const e of phase.effects) console.log(`  ${mark(e.status)} ${e.label}  [group ${e.group}]`)
+  }
+  if (trace.unphased.length) {
+    console.log('(no phase)')
+    for (const e of trace.unphased)
+      console.log(`  ${mark(e.status)} ${e.label}  [group ${e.group}]`)
+  }
+  const groups = Object.entries(trace.groups)
+    .map(([g, n]) => `${g}=${n}`)
+    .join(', ')
+  console.log(`groups: ${groups || '(none)'}`)
+  console.log(`logs: ${trace.logs}`)
+}
+
+type RunEffect = {
+  callIndex: number
+  status: string
+  phase?: string | null
+  concurrencyGroup?: string
+  opts?: { label?: string; agentType?: string }
+}
+type RunState = {
+  runId: string
+  status: string
+  workflow?: { name?: string }
+  effects?: Record<string, RunEffect>
+  phases?: Array<{ title: string }>
+  logs?: unknown[]
+}
+type TraceEffect = { label: string; group: string; status: string }
+type Trace = {
+  runId: string
+  status: string
+  workflow: string
+  phases: Array<{ title: string; effects: TraceEffect[] }>
+  unphased: TraceEffect[]
+  groups: Record<string, number>
+  logs: number
+}
+
+function buildTrace(state: RunState): Trace {
+  const effects = Object.values(state.effects ?? {}).sort((a, b) => a.callIndex - b.callIndex)
+  const toTrace = (e: RunEffect): TraceEffect => ({
+    label: e.opts?.label || e.opts?.agentType || '(agent)',
+    group: e.concurrencyGroup || 'default',
+    status: e.status,
+  })
+  const order: string[] = []
+  for (const p of state.phases ?? []) if (!order.includes(p.title)) order.push(p.title)
+  for (const e of effects) if (e.phase && !order.includes(e.phase)) order.push(e.phase)
+
+  const phases = order.map((title) => ({
+    title,
+    effects: effects.filter((e) => e.phase === title).map(toTrace),
+  }))
+  const unphased = effects.filter((e) => !e.phase).map(toTrace)
+  const groups: Record<string, number> = {}
+  for (const e of effects) {
+    const g = e.concurrencyGroup || 'default'
+    groups[g] = (groups[g] ?? 0) + 1
+  }
+  return {
+    runId: state.runId,
+    status: state.status,
+    workflow: state.workflow?.name ?? '(unknown)',
+    phases,
+    unphased,
+    groups,
+    logs: (state.logs ?? []).length,
+  }
+}
+
+function mark(status: string): string {
+  if (status === 'completed') return '✓'
+  if (status === 'failed') return '✗'
+  return '·'
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function statusCommand(argv: string[]) {
@@ -341,8 +475,10 @@ Usage:
   owf validate <workflow.js|name> [--strict] [--output json]
   owf status <run-id>
   owf resume <run-id>
-  owf dsl [--json]                 print the workflow DSL contract
-  owf codex install [--print]      install the authoring skill into ~/.codex/skills
+  owf trace <run-id> [--output json]   summarize a run's phase/effect/group structure
+  owf new <name> [--template basic|pipeline|gated-fanout|judge-panel] [--dir DIR]
+  owf dsl [--json]                     print the workflow DSL contract
+  owf codex install [--print]          install the authoring skill into ~/.codex/skills
 
 Adapters:
   mock              deterministic, quota-free (default)

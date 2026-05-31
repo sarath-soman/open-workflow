@@ -252,9 +252,11 @@ state.json
 ## Commands
 
 ```bash
+owf new <name> [--template basic|pipeline|gated-fanout|judge-panel]  # scaffold a workflow
 owf run <workflow.js|name> [--args JSON_OR_FILE] [--adapter mock|codex]
 owf validate <workflow.js|name> [--strict]   # lints DSL + policy invariants
 owf status <run-id>
+owf trace <run-id> [--json]                  # phase / effect / concurrency-group structure
 owf resume <run-id>
 owf dsl [--json]                             # print the DSL contract
 owf codex install                            # install the authoring skill into ~/.codex/skills
