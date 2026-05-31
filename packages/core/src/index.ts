@@ -4,6 +4,8 @@ export type {
   AgentAdapter,
   AgentRunInput,
   AgentRunResult,
+  ConcurrencyConfig,
+  ConcurrencyRule,
   JsonSchema,
   JsonValue,
   WorkflowMeta,

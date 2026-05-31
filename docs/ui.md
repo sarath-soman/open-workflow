@@ -9,8 +9,10 @@ All UIs read `events.jsonl` and `state.json`.
 
 ```json
 {"type":"phase.entered","phase":"impl"}
+{"type":"agent.queued","effectId":"abc","label":"implement","concurrencyGroup":"heavy"}
 {"type":"agent.started","effectId":"abc","label":"implement"}
 {"type":"agent.completed","effectId":"abc","label":"implement"}
+{"type":"agent.released","effectId":"abc","label":"implement","concurrencyGroup":"heavy"}
 ```
 
 Execution and rendering stay separate:
@@ -61,4 +63,3 @@ Codex and other hosts need only:
 3. inspect events/state on failure.
 
 Rich rendering belongs in `open-workflow render`, not in each agent host.
-

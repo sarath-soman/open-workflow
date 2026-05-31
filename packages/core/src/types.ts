@@ -50,6 +50,21 @@ export type AgentAdapter = {
   run(input: AgentRunInput, ctx: AdapterContext): Promise<AgentRunResult>
 }
 
+export type ConcurrencyConfig = {
+  default?: number | undefined
+  groups?: Record<string, number> | undefined
+  rules?: ConcurrencyRule[] | undefined
+}
+
+export type ConcurrencyRule = {
+  group: string
+  label?: string | undefined
+  labelPrefix?: string | undefined
+  phase?: string | undefined
+  agentType?: string | undefined
+  model?: string | undefined
+}
+
 export type WorkflowRunResult = {
   status: 'completed' | 'failed' | 'running'
   runId: string
@@ -64,6 +79,7 @@ export type WorkflowRunResult = {
 export type RuntimeOptions = {
   args?: Record<string, unknown>
   adapter: AgentAdapter
+  concurrency?: ConcurrencyConfig | undefined
   cwd: string
   runsDir: string
   runId?: string

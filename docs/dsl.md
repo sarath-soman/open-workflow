@@ -3,6 +3,10 @@
 `open-workflow` targets source compatibility with Claude Code Dynamic Workflow
 scripts.
 
+Workflow scripts are not the place to pace model calls with wall-clock sleeps.
+The runtime blocks `Date` and timer globals in workflow code. Use runtime
+concurrency policy instead.
+
 ## Required Header
 
 Every script starts with a literal `meta` export:
@@ -49,6 +53,10 @@ const result = await agent('Review the diff.', {
 `schema` is passed to the adapter. Adapters that support structured output should
 validate or repair output before returning.
 
+Concurrency is not configured in the workflow script. `open-workflow` assigns
+agent effects to scheduler gates through config rules that match existing
+Claude-compatible fields such as `label`, `phase`, `agentType`, and `model`.
+
 ### `workflow(nameOrPath, args?)`
 
 Runs a child workflow and returns its result.
@@ -94,3 +102,6 @@ Avoid adding new globals. Runtime-specific extensions should eventually live
 under an explicit namespace such as `ow.*` so Claude-compatible scripts remain
 portable.
 
+Concurrency policy intentionally lives outside the workflow DSL. This preserves
+the useful invariant: workflow code describes fanout; the runtime owns pressure
+control.

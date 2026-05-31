@@ -7,7 +7,8 @@ The CLI is the stable user-facing entry point.
 ```bash
 open-workflow run ./workflows/swe.workflow.js \
   --adapter mock \
-  --args '{"issue":123}'
+  --args '{"issue":123}' \
+  --agent-concurrency 3
 ```
 
 During local development:
@@ -17,6 +18,47 @@ bun run ow run ./examples/hello.workflow.js \
   --adapter mock \
   --args '{"topic":"agent fanout"}'
 ```
+
+## Concurrency Gates
+
+The runtime gates `agent()` effects directly. This is how workflows control
+tokens-per-minute pressure when the host workflow language has no sleep or clock
+APIs.
+
+Set a global default:
+
+```bash
+bun run ow run hello --agent-concurrency 3
+```
+
+Set named groups:
+
+```bash
+bun run ow run gated-fanout --concurrency heavy=1,judge=3
+```
+
+Workflow code remains Claude-compatible and uses ordinary labels:
+
+```js
+await agent('Run expensive analysis.', {
+  label: 'heavy:analysis',
+})
+```
+
+Config maps those labels to groups:
+
+```json
+{
+  "concurrency": {
+    "groups": { "heavy": 1 },
+    "rules": [{ "group": "heavy", "labelPrefix": "heavy:" }]
+  }
+}
+```
+
+`parallel()` may still create many tasks. The scheduler queues agent effects at
+the group boundary and emits `agent.queued`, `agent.started`, `agent.completed`,
+and `agent.released` events.
 
 ## Named Workflow
 

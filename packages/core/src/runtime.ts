@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type {
   AgentAdapter,
+  ConcurrencyConfig,
   JsonSchema,
   RuntimeOptions,
   WorkflowMeta,
@@ -12,17 +13,19 @@ import type {
 
 type EffectState = {
   effectId: string
-  status: 'running' | 'completed'
+  status: 'running' | 'completed' | 'failed'
   kind: 'agent'
   prompt: string
   opts: AgentOptions
   callIndex: number
   phase?: string | undefined
+  concurrencyGroup?: string | undefined
   startedAt: string
   completedAt?: string | undefined
   output?: unknown
   transcriptRef?: string | undefined
   usage?: unknown
+  error?: { message: string; stack?: string | undefined }
 }
 
 type AgentOptions = {
@@ -62,6 +65,8 @@ type RuntimeContext = {
   state: WorkflowState
   statePath: string
   eventsPath: string
+  concurrency: NormalizedConcurrencyConfig
+  gates: ConcurrencyGates
 }
 
 type RuntimeApi = RuntimeContext & {
@@ -86,7 +91,7 @@ export async function validateWorkflowFile(scriptPath: string) {
 
 export async function runWorkflowFile(
   scriptPath: string,
-  options: RuntimeOptions,
+  options: InternalRuntimeOptions,
 ): Promise<WorkflowRunResult> {
   const absScriptPath = path.resolve(scriptPath)
   const source = await fs.readFile(absScriptPath, 'utf8')
@@ -126,7 +131,9 @@ export async function runWorkflowFile(
     meta,
     args: state.args,
     adapter: options.adapter,
+    concurrency: normalizeConcurrency(options.concurrency),
     cwd: options.cwd,
+    gates: options.gates ?? new Map(),
     workflowDir: path.dirname(absScriptPath),
     runsDir,
     runDir,
@@ -210,37 +217,78 @@ function createRuntime(ctx: RuntimeContext): RuntimeApi {
       startedAt: new Date().toISOString(),
     }
     ctx.state.effects[effectId] = effect
-    emit('agent.started', {
+    const concurrencyGroup = resolveConcurrencyGroup(opts, currentPhase, ctx.concurrency)
+    effect.concurrencyGroup = concurrencyGroup
+    const gate = getGate(ctx.gates, ctx.concurrency, concurrencyGroup)
+    emit('agent.queued', {
       effectId,
+      concurrencyGroup,
       label: opts.label,
       phase: effect.phase,
       agentType: opts.agentType,
     })
     await persist()
 
-    const result = await ctx.adapter.run(
-      {
-        prompt,
+    const release = await gate.acquire()
+    emit('agent.started', {
+      effectId,
+      concurrencyGroup,
+      label: opts.label,
+      phase: effect.phase,
+      agentType: opts.agentType,
+    })
+    try {
+      const result = await ctx.adapter.run(
+        {
+          prompt,
+          label: opts.label,
+          phase: effect.phase,
+          agentType: opts.agentType,
+          model: opts.model,
+          schema: opts.schema,
+          cwd: opts.cwd || ctx.cwd,
+          skills: opts.skills,
+          metadata: opts.metadata,
+        },
+        { runId: ctx.runId, runDir: ctx.runDir, effectId },
+      )
+
+      effect.status = 'completed'
+      effect.completedAt = new Date().toISOString()
+      effect.output = result.output
+      effect.transcriptRef = result.transcriptRef
+      effect.usage = result.usage
+      emit('agent.completed', {
+        effectId,
+        concurrencyGroup,
         label: opts.label,
         phase: effect.phase,
-        agentType: opts.agentType,
-        model: opts.model,
-        schema: opts.schema,
-        cwd: opts.cwd || ctx.cwd,
-        skills: opts.skills,
-        metadata: opts.metadata,
-      },
-      { runId: ctx.runId, runDir: ctx.runDir, effectId },
-    )
-
-    effect.status = 'completed'
-    effect.completedAt = new Date().toISOString()
-    effect.output = result.output
-    effect.transcriptRef = result.transcriptRef
-    effect.usage = result.usage
-    emit('agent.completed', { effectId, label: opts.label, phase: effect.phase })
-    await persist()
-    return result.output
+      })
+      await persist()
+      return result.output
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error))
+      effect.status = 'failed'
+      effect.completedAt = new Date().toISOString()
+      effect.error = { message: err.message, stack: err.stack }
+      emit('agent.failed', {
+        effectId,
+        concurrencyGroup,
+        label: opts.label,
+        phase: effect.phase,
+        message: err.message,
+      })
+      await persist()
+      throw err
+    } finally {
+      release()
+      emit('agent.released', {
+        effectId,
+        concurrencyGroup,
+        label: opts.label,
+        phase: effect.phase,
+      })
+    }
   }
 
   async function childWorkflow(nameOrPath: string, args: Record<string, unknown> = {}) {
@@ -248,7 +296,9 @@ function createRuntime(ctx: RuntimeContext): RuntimeApi {
     const result = await runWorkflowFile(workflowPath, {
       args,
       adapter: ctx.adapter,
+      concurrency: ctx.concurrency,
       cwd: ctx.cwd,
+      gates: ctx.gates,
       runsDir: ctx.runsDir,
     })
     return result.workflowResult
@@ -294,6 +344,90 @@ function createRuntime(ctx: RuntimeContext): RuntimeApi {
   return { ...ctx, agent, workflow: childWorkflow, parallel, pipeline, phase, log, emit }
 }
 
+type InternalRuntimeOptions = RuntimeOptions & {
+  gates?: ConcurrencyGates | undefined
+}
+
+type NormalizedConcurrencyConfig = {
+  default: number
+  groups: Record<string, number>
+  rules: Array<{
+    group: string
+    label?: string | undefined
+    labelPrefix?: string | undefined
+    phase?: string | undefined
+    agentType?: string | undefined
+    model?: string | undefined
+  }>
+}
+
+type ConcurrencyGates = Map<string, Semaphore>
+
+class Semaphore {
+  readonly limit: number
+  #active = 0
+  #queue: Array<() => void> = []
+
+  constructor(limit: number) {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new Error(`concurrency limit must be a positive integer; got ${limit}`)
+    }
+    this.limit = limit
+  }
+
+  async acquire(): Promise<() => void> {
+    if (this.#active >= this.limit) {
+      await new Promise<void>((resolve) => this.#queue.push(resolve))
+    }
+    this.#active++
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.#active--
+      const next = this.#queue.shift()
+      if (next) next()
+    }
+  }
+}
+
+function normalizeConcurrency(config?: ConcurrencyConfig): NormalizedConcurrencyConfig {
+  return {
+    default: config?.default ?? Number.POSITIVE_INFINITY,
+    groups: config?.groups ?? {},
+    rules: config?.rules ?? [],
+  }
+}
+
+function getGate(
+  gates: ConcurrencyGates,
+  config: NormalizedConcurrencyConfig,
+  group: string,
+): Semaphore {
+  const existing = gates.get(group)
+  if (existing) return existing
+  const limit = config.groups[group] ?? config.default
+  const gate = new Semaphore(limit === Number.POSITIVE_INFINITY ? Number.MAX_SAFE_INTEGER : limit)
+  gates.set(group, gate)
+  return gate
+}
+
+function resolveConcurrencyGroup(
+  opts: AgentOptions,
+  currentPhase: string | null,
+  config: NormalizedConcurrencyConfig,
+) {
+  for (const rule of config.rules) {
+    if (rule.label !== undefined && rule.label !== opts.label) continue
+    if (rule.labelPrefix !== undefined && !opts.label?.startsWith(rule.labelPrefix)) continue
+    if (rule.phase !== undefined && rule.phase !== (opts.phase || currentPhase)) continue
+    if (rule.agentType !== undefined && rule.agentType !== opts.agentType) continue
+    if (rule.model !== undefined && rule.model !== opts.model) continue
+    return rule.group
+  }
+  return 'default'
+}
+
 async function executeWorkflow(source: string, runtime: RuntimeApi) {
   const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (
     ...args: string[]
@@ -306,8 +440,17 @@ async function executeWorkflow(source: string, runtime: RuntimeApi) {
     'pipeline',
     'phase',
     'log',
+    'Date',
+    'setTimeout',
+    'setInterval',
+    'clearTimeout',
+    'clearInterval',
+    'globalThis',
     source,
   )
+  const blockedTimer = () => {
+    throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
+  }
   return fn(
     runtime.args,
     runtime.agent,
@@ -316,7 +459,42 @@ async function executeWorkflow(source: string, runtime: RuntimeApi) {
     runtime.pipeline,
     runtime.phase,
     runtime.log,
+    createBlockedDate(),
+    blockedTimer,
+    blockedTimer,
+    blockedTimer,
+    blockedTimer,
+    createBlockedGlobal(),
   )
+}
+
+function createBlockedDate() {
+  const blocked = () => {
+    throw new Error('workflow scripts cannot use Date; control pacing with agent concurrency')
+  }
+  return Object.assign(blocked, {
+    now: blocked,
+    parse: blocked,
+    UTC: blocked,
+  })
+}
+
+function createBlockedGlobal() {
+  return {
+    Date: createBlockedDate(),
+    setTimeout: () => {
+      throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
+    },
+    setInterval: () => {
+      throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
+    },
+    clearTimeout: () => {
+      throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
+    },
+    clearInterval: () => {
+      throw new Error('workflow scripts cannot use timers; gate agent concurrency instead')
+    },
+  }
 }
 
 export function extractMeta(source: string): { meta: WorkflowMeta; executableSource: string } {

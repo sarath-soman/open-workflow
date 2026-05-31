@@ -1,6 +1,19 @@
 {
   "workflows": {
-    "hello": "examples/hello.workflow.js"
+    "hello": "examples/hello.workflow.js",
+    "gated-fanout": "examples/gated-fanout.workflow.js"
+  },
+  "concurrency": {
+    "default": 4,
+    "groups": {
+      "heavy": 1
+    },
+    "rules": [
+      {
+        "group": "heavy",
+        "labelPrefix": "heavy:"
+      }
+    ]
   },
   "defaultAdapter": "mock",
   "runsDir": ".open-workflow/runs"

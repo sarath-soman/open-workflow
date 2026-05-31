@@ -23,6 +23,13 @@ Agents receive only:
 
 This is the key privacy boundary.
 
+## Clock and Timer Boundary
+
+Workflow scripts cannot use `Date`, `Date.now`, `setTimeout`, or `setInterval`.
+This mirrors the useful restriction in Claude Code workflows: workflow logic
+should not depend on wall-clock pacing. Token pressure is managed through
+runtime-owned agent concurrency gates.
+
 ## Future Hardening
 
 - VM sandbox for workflow code.
@@ -30,4 +37,3 @@ This is the key privacy boundary.
 - Signed workflow manifests.
 - Redaction pass for event logs.
 - Per-adapter allowlists for tools and files.
-

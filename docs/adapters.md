@@ -3,6 +3,10 @@
 Adapters execute `agent()` effects. The workflow runtime owns control flow;
 adapters own model/tool execution.
 
+The runtime applies concurrency gates before calling an adapter. Adapters do not
+need to implement their own fanout queue unless the upstream provider has
+additional adapter-specific limits.
+
 ## Interface
 
 ```ts

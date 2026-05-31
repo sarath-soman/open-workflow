@@ -42,6 +42,10 @@ This is enough for deterministic scripts. Long-term, loop path and source
 locations should be included so editing one part of a workflow invalidates fewer
 effects.
 
+Workflow-source effect identity remains based on normal `agent()` inputs.
+Changing runtime concurrency policy does not change prompts or adapter outputs;
+it changes only scheduling.
+
 ## Resume Flow
 
 ```bash
