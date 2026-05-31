@@ -17,8 +17,9 @@ adapters (`mock`, `codex`). Design rationale in `README.md`; per-surface notes i
 |---|---|
 | `bun install` | deps + workspace links |
 | `bun run check` | tsc + biome — **run before committing** |
+| `bun test` | unit + integration + e2e (skill-eval); `bun:test`, no deps |
 | `bun run format` | biome autofix |
-| `bun run smoke` | e2e `hello` via mock (no test runner yet) |
+| `bun run smoke` | quick e2e `hello` via mock |
 | `bun run ow <cmd>` / `owf <cmd>` | CLI: `run` · `validate` · `status` · `resume` |
 | `bun run build` | compile host `owf` → `dist/owf` |
 | `bun run build:all` | cross-compile every release target |
@@ -59,6 +60,14 @@ open-workflow.config.json  named workflows · concurrency policy · defaultAdapt
   `allowImportingTsExtensions`, which conflicts with declaration emit). Bun resolves `.js`→`.ts` at runtime.
   Biome auto-sorts imports and exports.
 - Conventional-commit titles for commits/PRs (`feat fix chore docs refactor test ci build perf`).
+
+## Tests
+`bun test` (built-in runner, no deps). Layers:
+- **Unit** — co-located `packages/**/*.test.ts`: scheduler (rules + gate), lint (every rule + string-masking), dsl (contract↔lint consistency), extractMeta, both adapters (codex via a stub bin).
+- **Integration** — `tests/integration/`: every DSL construct through the mock adapter + combinations; policy (concurrency gating, replay/resume, event+state shape, blocked-globals throw).
+- **E2E / skill-eval** — `tests/e2e/`: spawns the real CLI; skill-eval asserts the SKILL.md references only routed commands and that its prescribed loop (`dsl`→`validate --strict`→`run --adapter mock`) succeeds on shipped examples. A live-Codex eval is gated behind `OWF_LIVE_CODEX_EVAL=1` (off by default — quota-spending).
+
+When adding a DSL global or policy, add its unit + integration coverage and keep the dsl↔lint consistency test green.
 
 ## Operating the runtime (as an agent)
 Use a workflow when one exists — don't inline its phases by hand. Read the script +

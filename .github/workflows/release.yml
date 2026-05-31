@@ -21,6 +21,8 @@ jobs:
 
       - run: bun run check
 
+      - run: bun test
+
       # Bun cross-compiles every target from one runner, downloading each
       # target runtime as needed. Asset names match scripts/install.sh.
       - run: bun run build:all

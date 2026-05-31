@@ -9,5 +9,6 @@
       "@open-workflow/adapter-codex": ["./packages/adapter-codex/src/index.ts"]
     }
   },
-  "include": ["packages/**/*.ts"]
+  "include": ["packages/**/*.ts"],
+  "exclude": ["**/*.test.ts", "tests"]
 }

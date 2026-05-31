@@ -14,6 +14,7 @@
     "check": "bun run check:types && bun run check:biome",
     "check:types": "bunx tsc --noEmit -p tsconfig.check.json",
     "check:biome": "bunx biome check .",
+    "test": "bun test",
     "format": "bunx biome format --write .",
     "build": "bun build --compile packages/cli/src/index.ts --outfile dist/owf",
     "build:all": "bash scripts/build.sh",
