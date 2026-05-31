@@ -10,6 +10,8 @@ let tmp: string
 let okBin: string
 let failBin: string
 let fencedBin: string
+let argvBin: string
+let argvOut: string
 
 beforeAll(() => {
   tmp = mkdtempSync(path.join(tmpdir(), 'owf-codex-'))
@@ -58,7 +60,22 @@ process.exit(1)
 `,
   )
 
-  for (const b of [okBin, fencedBin, failBin]) chmodSync(b, 0o755)
+  // Stub that records the argv it was invoked with, for arg-construction assertions.
+  argvOut = path.join(tmp, 'argv.json')
+  argvBin = path.join(tmp, 'argv.mjs')
+  writeFileSync(
+    argvBin,
+    `#!/usr/bin/env bun
+import fs from 'node:fs'
+const a = process.argv.slice(2)
+fs.writeFileSync(${JSON.stringify(argvOut)}, JSON.stringify(a))
+const out = a[a.indexOf('-o') + 1]
+if (out) fs.writeFileSync(out, '{}')
+process.exit(0)
+`,
+  )
+
+  for (const b of [okBin, fencedBin, failBin, argvBin]) chmodSync(b, 0o755)
 })
 
 afterAll(() => rmSync(tmp, { recursive: true, force: true }))
@@ -137,5 +154,28 @@ describe('codex adapter', () => {
   test('reports a clear error when the binary is missing', async () => {
     const a = createCodexAdapter({ bin: path.join(tmp, 'does-not-exist') })
     expect(a.run(input(), await runCtx())).rejects.toThrow(/not found/)
+  })
+
+  test('constructs the codex exec argv from the input + config', async () => {
+    const a = createCodexAdapter({ bin: argvBin, model: 'cfg-model' })
+    const ctx = await runCtx()
+    await a.run(input({ cwd: '/work/dir', schema: { type: 'object' } }), ctx)
+    const argv: string[] = JSON.parse(await fs.readFile(argvOut, 'utf8'))
+    expect(argv[0]).toBe('exec')
+    expect(argv).toContain('--json')
+    expect(argv).toContain('--skip-git-repo-check')
+    expect(argv).toContain('-')
+    expect(argv[argv.indexOf('-C') + 1]).toBe('/work/dir')
+    expect(argv[argv.indexOf('-m') + 1]).toBe('cfg-model')
+    expect(argv).toContain('--output-schema')
+    expect(argv[argv.indexOf('-o') + 1]).toContain('last-message.txt')
+  })
+
+  test('per-call model overrides the adapter default; no schema flag without a schema', async () => {
+    const a = createCodexAdapter({ bin: argvBin, model: 'cfg-model' })
+    await a.run(input({ model: 'call-model' }), await runCtx())
+    const argv: string[] = JSON.parse(await fs.readFile(argvOut, 'utf8'))
+    expect(argv[argv.indexOf('-m') + 1]).toBe('call-model')
+    expect(argv).not.toContain('--output-schema')
   })
 })
