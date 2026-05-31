@@ -107,6 +107,33 @@ describe('owf run + status', () => {
   })
 })
 
+describe('owf CLI usability', () => {
+  test('--version prints the version', async () => {
+    const { stdout, code } = await runCli(['--version'])
+    expect(code).toBe(0)
+    expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/)
+  })
+
+  test('per-command help: `run --help` prints run usage and exits 0', async () => {
+    const { stdout, code } = await runCli(['run', '--help'])
+    expect(code).toBe(0)
+    expect(stdout).toContain('owf run')
+  })
+
+  test('unknown flag is rejected with a helpful message', async () => {
+    const { stderr, code } = await runCli(['run', '--adaptor', 'codex', 'x.workflow.js'])
+    expect(code).toBe(1)
+    expect(stderr).toContain('unknown flag')
+    expect(stderr).toContain('adaptor')
+  })
+
+  test('upgrade is a routed command (help works without network)', async () => {
+    const { stdout, code } = await runCli(['upgrade', '--help'])
+    expect(code).toBe(0)
+    expect(stdout).toContain('owf upgrade')
+  })
+})
+
 describe('owf codex install', () => {
   test('writes SKILL.md to the target skills dir', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'owf-e2e-skill-'))

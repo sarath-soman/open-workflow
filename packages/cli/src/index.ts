@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -16,6 +17,58 @@ import {
 } from '@open-workflow/core'
 import { AUTHOR_WORKFLOW_SKILL, AUTHOR_WORKFLOW_SKILL_NAME } from './codex-skill.js'
 import { renderTemplate, TEMPLATE_NAMES, type TemplateName } from './templates.js'
+import { VERSION } from './version.js'
+
+const GLOBAL_FLAGS = ['help', 'h']
+
+// Per-command flag allowlist — unknown flags are rejected, not silently ignored.
+const COMMAND_FLAGS: Record<string, string[]> = {
+  run: [
+    'adapter',
+    'output',
+    'args',
+    'agent-concurrency',
+    'concurrency',
+    'runs-dir',
+    'cwd',
+    'config',
+    'mock-responses',
+    'codex-bin',
+    'codex-model',
+    'codex-sandbox',
+  ],
+  validate: ['strict', 'output', 'cwd', 'config'],
+  status: ['runs-dir', 'cwd', 'output'],
+  resume: [
+    'runs-dir',
+    'cwd',
+    'config',
+    'output',
+    'adapter',
+    'mock-responses',
+    'codex-bin',
+    'codex-model',
+    'codex-sandbox',
+  ],
+  trace: ['runs-dir', 'cwd', 'output'],
+  dsl: ['json', 'output'],
+  codex: ['print', 'dir'],
+  new: ['template', 'dir', 'cwd', 'force'],
+  upgrade: [],
+}
+
+// One-line usage per command for `owf <cmd> --help`.
+const COMMAND_HELP: Record<string, string> = {
+  run: 'owf run <workflow.js|name> [--args JSON_OR_FILE] [--adapter mock|codex] [--output pretty|json]\n            [--agent-concurrency N] [--concurrency GROUP=N[,GROUP=N]] [--runs-dir DIR]',
+  validate: 'owf validate <workflow.js|name> [--strict] [--output json]',
+  status: 'owf status <run-id> [--runs-dir DIR] [--output json]',
+  resume: 'owf resume <run-id> [--adapter mock|codex] [--runs-dir DIR] [--output json]',
+  trace: 'owf trace <run-id> [--runs-dir DIR] [--output json]',
+  dsl: 'owf dsl [--json]',
+  codex: 'owf codex install [--dir DIR] [--print]',
+  new: `owf new <name> [--template ${TEMPLATE_NAMES.join('|')}] [--dir DIR] [--force]`,
+  upgrade: 'owf upgrade [version]   re-run the installer to fetch the latest (or a given) release',
+}
 
 const DEFAULT_RUNS_DIR = '.open-workflow/runs'
 
@@ -33,6 +86,18 @@ export async function main(argv: string[]) {
     return
   }
 
+  if (command === '--version' || command === '-V' || command === 'version') {
+    console.log(VERSION)
+    return
+  }
+
+  const known = command in COMMAND_FLAGS
+  if (known && (rest.includes('--help') || rest.includes('-h'))) {
+    console.log(`Usage:\n  ${COMMAND_HELP[command]}`)
+    return
+  }
+  if (known) assertKnownFlags(command, rest)
+
   if (command === 'run') return runCommand(rest)
   if (command === 'validate') return validateCommand(rest)
   if (command === 'status') return statusCommand(rest)
@@ -41,8 +106,21 @@ export async function main(argv: string[]) {
   if (command === 'codex') return codexCommand(rest)
   if (command === 'new') return newCommand(rest)
   if (command === 'trace') return traceCommand(rest)
+  if (command === 'upgrade') return upgradeCommand(rest)
 
   throw new Error(`unknown command: ${command}`)
+}
+
+function assertKnownFlags(command: string, argv: string[]) {
+  const allowed = new Set([...(COMMAND_FLAGS[command] ?? []), ...GLOBAL_FLAGS])
+  const { flags } = parseArgs(argv)
+  const unknown = Object.keys(flags).filter((f) => !allowed.has(f))
+  if (unknown.length) {
+    throw new Error(
+      `unknown flag(s) for '${command}': ${unknown.map((u) => `--${u}`).join(', ')}\n` +
+        `valid: ${[...allowed].map((a) => `--${a}`).join(', ')}`,
+    )
+  }
 }
 
 async function runCommand(argv: string[]) {
@@ -127,6 +205,26 @@ async function codexCommand(argv: string[]) {
   await fs.writeFile(skillPath, AUTHOR_WORKFLOW_SKILL)
   console.log(`installed '${AUTHOR_WORKFLOW_SKILL_NAME}' skill to ${skillPath}`)
   console.log(`Codex discovers it under ${skillsRoot}. Invoke with @${AUTHOR_WORKFLOW_SKILL_NAME}.`)
+}
+
+const UPGRADE_REPO = 'sarath-soman/open-workflow'
+
+async function upgradeCommand(argv: string[]) {
+  const { positional } = parseArgs(argv)
+  const version = positional[0]
+  const installer = `https://raw.githubusercontent.com/${UPGRADE_REPO}/main/scripts/install.sh`
+  const pipeline = `curl -fsSL ${installer} | bash${version ? ` -s ${version}` : ''}`
+  console.log(`upgrading owf (${version || 'latest'})...`)
+  const code = await new Promise<number>((resolve, reject) => {
+    const child = spawn('bash', ['-c', pipeline], { stdio: 'inherit' })
+    child.on('error', reject)
+    child.on('close', (c) => resolve(c ?? 0))
+  })
+  if (code !== 0) {
+    throw new Error(
+      `upgrade failed (exit ${code}); install manually from https://github.com/${UPGRADE_REPO}`,
+    )
+  }
 }
 
 async function newCommand(argv: string[]) {
@@ -479,6 +577,10 @@ Usage:
   owf new <name> [--template basic|pipeline|gated-fanout|judge-panel] [--dir DIR]
   owf dsl [--json]                     print the workflow DSL contract
   owf codex install [--print]          install the authoring skill into ~/.codex/skills
+  owf upgrade [version]                re-run the installer to fetch the latest release
+  owf --version                        print the owf version
+
+Run \`owf <command> --help\` for command-specific usage.
 
 Adapters:
   mock              deterministic, quota-free (default)
