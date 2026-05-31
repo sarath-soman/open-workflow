@@ -1,12 +1,20 @@
 #!/usr/bin/env bun
 
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { type CodexAdapterConfig, createCodexAdapter } from '@open-workflow/adapter-codex'
 import { createMockAdapter } from '@open-workflow/adapter-mock'
 import type { AgentAdapter, ConcurrencyConfig } from '@open-workflow/core'
-import { runWorkflowFile, validateWorkflowFile } from '@open-workflow/core'
+import {
+  DSL_CONTRACT,
+  lintWorkflow,
+  renderDslContract,
+  runWorkflowFile,
+  validateWorkflowFile,
+} from '@open-workflow/core'
+import { AUTHOR_WORKFLOW_SKILL, AUTHOR_WORKFLOW_SKILL_NAME } from './codex-skill.js'
 
 const DEFAULT_RUNS_DIR = '.open-workflow/runs'
 
@@ -28,6 +36,8 @@ export async function main(argv: string[]) {
   if (command === 'validate') return validateCommand(rest)
   if (command === 'status') return statusCommand(rest)
   if (command === 'resume') return resumeCommand(rest)
+  if (command === 'dsl') return dslCommand(rest)
+  if (command === 'codex') return codexCommand(rest)
 
   throw new Error(`unknown command: ${command}`)
 }
@@ -64,12 +74,56 @@ async function validateCommand(argv: string[]) {
   const config = await loadConfigFromFlags(cwd, flags)
   const workflowPath = resolveWorkflowTarget(target, cwd, config)
   const validation = await validateWorkflowFile(workflowPath)
+
+  const source = await fs.readFile(workflowPath, 'utf8')
+  const findings = lintWorkflow(source)
+  const strict = flags.strict === true
+  const errors = findings.filter((f) => f.severity === 'error')
+  const warnings = findings.filter((f) => f.severity === 'warning')
+  const failed = errors.length > 0 || (strict && warnings.length > 0)
+
   if (flags.output === 'json') {
-    console.log(JSON.stringify(validation, null, 2))
+    console.log(JSON.stringify({ ...validation, findings, ok: !failed }, null, 2))
+  } else {
+    console.log(`${failed ? 'invalid' : 'valid'} workflow: ${validation.meta.name}`)
+    console.log(validation.path)
+    for (const f of findings) {
+      console.log(
+        `  ${f.severity === 'error' ? 'error' : 'warn '} ${workflowPath}:${f.line}  [${f.rule}] ${f.message}`,
+      )
+    }
+    if (!findings.length) console.log('  no lint findings')
+  }
+  if (failed) process.exitCode = 1
+}
+
+function dslCommand(argv: string[]) {
+  const { flags } = parseArgs(argv)
+  if (flags.output === 'json' || flags.json === true) {
+    console.log(JSON.stringify(DSL_CONTRACT, null, 2))
     return
   }
-  console.log(`valid workflow: ${validation.meta.name}`)
-  console.log(validation.path)
+  process.stdout.write(renderDslContract())
+}
+
+async function codexCommand(argv: string[]) {
+  const { positional, flags } = parseArgs(argv)
+  const sub = positional[0]
+  if (sub !== 'install') {
+    throw new Error('usage: owf codex install [--dir DIR] [--print]')
+  }
+  if (flags.print === true) {
+    process.stdout.write(AUTHOR_WORKFLOW_SKILL)
+    return
+  }
+  const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
+  const skillsRoot = stringFlag(flags.dir) || path.join(codexHome, 'skills')
+  const skillDir = path.join(skillsRoot, AUTHOR_WORKFLOW_SKILL_NAME)
+  const skillPath = path.join(skillDir, 'SKILL.md')
+  await fs.mkdir(skillDir, { recursive: true })
+  await fs.writeFile(skillPath, AUTHOR_WORKFLOW_SKILL)
+  console.log(`installed '${AUTHOR_WORKFLOW_SKILL_NAME}' skill to ${skillPath}`)
+  console.log(`Codex discovers it under ${skillsRoot}. Invoke with @${AUTHOR_WORKFLOW_SKILL_NAME}.`)
 }
 
 async function statusCommand(argv: string[]) {
@@ -284,9 +338,11 @@ function printHelp() {
 Usage:
   owf run <workflow.js|name> [--args JSON_OR_FILE] [--adapter mock|codex] [--output pretty|json]
           [--agent-concurrency N] [--concurrency GROUP=N[,GROUP=N]]
-  owf validate <workflow.js|name>
+  owf validate <workflow.js|name> [--strict] [--output json]
   owf status <run-id>
   owf resume <run-id>
+  owf dsl [--json]                 print the workflow DSL contract
+  owf codex install [--print]      install the authoring skill into ~/.codex/skills
 
 Adapters:
   mock              deterministic, quota-free (default)

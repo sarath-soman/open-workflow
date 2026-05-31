@@ -252,10 +252,12 @@ state.json
 ## Commands
 
 ```bash
-open-workflow run <workflow.js|name> [--args JSON_OR_FILE] [--adapter mock|codex]
-open-workflow validate <workflow.js|name>
-open-workflow status <run-id>
-open-workflow resume <run-id>
+owf run <workflow.js|name> [--args JSON_OR_FILE] [--adapter mock|codex]
+owf validate <workflow.js|name> [--strict]   # lints DSL + policy invariants
+owf status <run-id>
+owf resume <run-id>
+owf dsl [--json]                             # print the DSL contract
+owf codex install                            # install the authoring skill into ~/.codex/skills
 ```
 
 For local development, call the workspace CLI through Bun:
